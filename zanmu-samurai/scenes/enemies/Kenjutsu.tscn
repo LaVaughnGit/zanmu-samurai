@@ -1,0 +1,28 @@
+[gd_scene load_steps=3 format=3 uid="uid://cv7rw2k5n8p3m"]
+
+[ext_resource type="Script" path="res://scripts/enemies/Kenjutsu.gd" id="1_kenjutsu"]
+
+[sub_resource type="RectangleShape2D" id="RectangleShape2D_body"]
+size = Vector2(28, 48)
+
+[node name="Kenjutsu" type="CharacterBody2D"]
+collision_layer = 4
+collision_mask = 3
+script = ExtResource("1_kenjutsu")
+
+[node name="Visual" type="Polygon2D" parent="."]
+polygon = PackedVector2Array(-11, -24, 11, -24, 14, 24, -14, 24)
+color = Color(0.78, 0.14, 0.14, 1)
+
+[node name="CollisionShape2D" type="CollisionShape2D" parent="."]
+shape = SubResource("RectangleShape2D_body")
+
+[node name="TelegraphIndicator" type="Polygon2D" parent="."]
+polygon = PackedVector2Array(0, 0, 32, -18, 44, -10, 48, 0, 44, 10, 32, 18)
+color = Color(1.0, 0.55, 0.1, 0.55)
+visible = false
+
+[node name="SlashVisual" type="Polygon2D" parent="."]
+polygon = PackedVector2Array(0, 0, 32, -18, 44, -10, 48, 0, 44, 10, 32, 18)
+color = Color(0.95, 0.2, 0.1, 0.9)
+visible = false
