@@ -24,7 +24,6 @@ func _ready() -> void:
 	_init_floor()
 
 func _init_floor() -> void:
-	room_type = RoomType.WELCOME
 	rooms_on_floor = rng.randi_range(7, 9)
 	rooms_visited = 0
 	current_room_pos = Vector2i(0, 0)
@@ -50,7 +49,6 @@ func _generate_floor() -> void:
 		if not position_set.has(new_pos):
 			positions.append(new_pos)
 			position_set[new_pos] = true
-
 	# Assign types: first = welcome, last = exit, everything else = random combat.
 	for i in positions.size():
 		var pos := positions[i]
