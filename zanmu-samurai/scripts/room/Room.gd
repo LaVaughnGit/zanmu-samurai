@@ -1,40 +1,43 @@
-extends Node2D
+extends Node3D
 class_name Room
 
 signal room_cleared
+signal transition_requested(direction: String)
 
-const PLAYER_SCENE   := preload("res://scenes/Player.tscn")
-const KENJUTSU_SCENE := preload("res://scenes/enemies/Kenjutsu.tscn")
+const PLAYER_SCENE    := preload("res://scenes/Player.tscn")
+const KENJUTSU_SCENE  := preload("res://scenes/enemies/Kenjutsu.tscn")
+const OUTLINE_SHADER  := preload("res://shaders/outline.gdshader")
+const TOON_SHADER     := preload("res://shaders/toon.gdshader")
 
-const HALF_W := 400.0
-const HALF_H := 260.0
-const WALL_T := 40.0
-const DOOR_W := 70.0
+# Room dimensions in 3D units (original pixel values / 50)
+const HALF_W := 8.0    # was 400 px
+const HALF_H := 5.2    # was 260 px
+const WALL_T := 0.8    # was 40 px — wall thickness
+const WALL_H := 2.5    # wall height (new 3D axis)
+const DOOR_W := 1.4    # was 70 px — door opening width
+const DOOR_H := 2.0    # door opening height (leaves a 0.5-unit lintel)
 
-var player: Player
-var enemies_node: Node2D
-var hud: HUD
+var player = null
+var enemies_node: Node3D
+var skip_player := false
 
 var _active_doors: Dictionary = {}
 var _door_blockers: Array[Node] = []
 
 
 func _ready() -> void:
-	y_sort_enabled = true
 	_roll_doors()
 	_build_environment()
-	_build_player()
+	if not skip_player:
+		_build_player()
 	if GameState.room_type == GameState.RoomType.WELCOME and GameState.floor_number == 1:
 		_build_welcome_content()
 	elif GameState.room_type == GameState.RoomType.EXIT:
 		_build_portal()
 	elif not _is_current_room_cleared():
 		_build_enemies()
-		if GameState.room_type == GameState.RoomType.OBSTACLE:
-			_build_obstacles()
-	hud = HUD.new()
-	add_child(hud)
-	_connect_signals()
+	if not skip_player:
+		_connect_signals()
 
 
 func _is_current_room_cleared() -> bool:
@@ -42,7 +45,7 @@ func _is_current_room_cleared() -> bool:
 	return data != null and data.get("cleared", false)
 
 
-# ── Doors (layout comes from GameState, not re-rolled) ────────────────────────
+# ── Doors (layout from GameState, not re-rolled) ──────────────────────────────
 
 func _roll_doors() -> void:
 	var data = GameState.room_data.get(GameState.current_room_pos, null)
@@ -55,36 +58,22 @@ func _roll_doors() -> void:
 # ── Environment ───────────────────────────────────────────────────────────────
 
 func _build_environment() -> void:
-	var cam := Camera2D.new()
-	cam.zoom = Vector2(1.4, 0.85)
-	add_child(cam)
-
-	var floor_poly := Polygon2D.new()
-	floor_poly.z_index = -1
-	floor_poly.polygon = PackedVector2Array([
-		Vector2(-HALF_W, -HALF_H), Vector2(HALF_W, -HALF_H),
-		Vector2(HALF_W,  HALF_H),  Vector2(-HALF_W,  HALF_H),
-	])
-	floor_poly.color = _floor_color()
-	add_child(floor_poly)
-
-	_build_horiz_wall(-(HALF_H + WALL_T * 0.5), _active_doors.get("N", false))
-	_build_horiz_wall( (HALF_H + WALL_T * 0.5), _active_doors.get("S", false))
-	_build_vert_wall( -(HALF_W + WALL_T * 0.5), _active_doors.get("W", false))
-	_build_vert_wall(  (HALF_W + WALL_T * 0.5), _active_doors.get("E", false))
-
-	var top_face := Polygon2D.new()
-	top_face.position = Vector2(0.0, -HALF_H)
-	top_face.polygon = PackedVector2Array([
-		Vector2(-(HALF_W + WALL_T), 0.0),
-		Vector2( (HALF_W + WALL_T), 0.0),
-		Vector2( (HALF_W + WALL_T), 50.0),
-		Vector2(-(HALF_W + WALL_T), 50.0),
-	])
-	top_face.color = Color(0.38, 0.32, 0.24)
-	add_child(top_face)
-
+	_build_floor()
+	_build_north_wall(_active_doors.get("N", false))
+	_build_south_wall(_active_doors.get("S", false))
+	_build_east_wall(_active_doors.get("E", false))
+	_build_west_wall(_active_doors.get("W", false))
 	_setup_doors()
+
+
+func _build_floor() -> void:
+	var mesh_inst := MeshInstance3D.new()
+	mesh_inst.position = Vector3(0.0, -0.05, 0.0)
+	var mesh := BoxMesh.new()
+	mesh.size = Vector3(HALF_W * 2.0, 0.1, HALF_H * 2.0)
+	mesh_inst.mesh = mesh
+	mesh_inst.material_override = _flat_material(_floor_color())
+	add_child(mesh_inst)
 
 
 func _floor_color() -> Color:
@@ -96,111 +85,134 @@ func _floor_color() -> Color:
 	return Color(0.27, 0.24, 0.20)
 
 
-func _build_horiz_wall(cy: float, has_door: bool) -> void:
-	var half_total := HALF_W + WALL_T
+# ── Walls ─────────────────────────────────────────────────────────────────────
+
+func _build_north_wall(has_door: bool) -> void:
+	var z := -(HALF_H + WALL_T * 0.5)
+	var full_w := (HALF_W + WALL_T) * 2.0
 	if has_door:
 		var dh := DOOR_W * 0.5
-		var seg := half_total - dh
-		_make_wall(Vector2(-(dh + seg * 0.5), cy), Vector2(seg, WALL_T))
-		_make_wall(Vector2( (dh + seg * 0.5), cy), Vector2(seg, WALL_T))
+		var seg := (HALF_W + WALL_T) - dh
+		_make_wall_3d(Vector3(-(dh + seg * 0.5), WALL_H * 0.5, z), Vector3(seg, WALL_H, WALL_T))
+		_make_wall_3d(Vector3( (dh + seg * 0.5), WALL_H * 0.5, z), Vector3(seg, WALL_H, WALL_T))
+		_make_wall_3d(Vector3(0.0, DOOR_H + (WALL_H - DOOR_H) * 0.5, z), Vector3(DOOR_W, WALL_H - DOOR_H, WALL_T))
 	else:
-		_make_wall(Vector2(0.0, cy), Vector2(half_total * 2.0, WALL_T))
+		_make_wall_3d(Vector3(0.0, WALL_H * 0.5, z), Vector3(full_w, WALL_H, WALL_T))
 
 
-func _build_vert_wall(cx: float, has_door: bool) -> void:
-	var half_total := HALF_H + WALL_T
+func _build_south_wall(has_door: bool) -> void:
+	var z := (HALF_H + WALL_T * 0.5)
+	var full_w := (HALF_W + WALL_T) * 2.0
 	if has_door:
 		var dh := DOOR_W * 0.5
-		var seg := half_total - dh
-		_make_wall(Vector2(cx, -(dh + seg * 0.5)), Vector2(WALL_T, seg))
-		_make_wall(Vector2(cx,  (dh + seg * 0.5)), Vector2(WALL_T, seg))
+		var seg := (HALF_W + WALL_T) - dh
+		_make_wall_3d(Vector3(-(dh + seg * 0.5), WALL_H * 0.5, z), Vector3(seg, WALL_H, WALL_T))
+		_make_wall_3d(Vector3( (dh + seg * 0.5), WALL_H * 0.5, z), Vector3(seg, WALL_H, WALL_T))
+		_make_wall_3d(Vector3(0.0, DOOR_H + (WALL_H - DOOR_H) * 0.5, z), Vector3(DOOR_W, WALL_H - DOOR_H, WALL_T))
 	else:
-		_make_wall(Vector2(cx, 0.0), Vector2(WALL_T, half_total * 2.0))
+		_make_wall_3d(Vector3(0.0, WALL_H * 0.5, z), Vector3(full_w, WALL_H, WALL_T))
 
 
-func _make_wall(pos: Vector2, size: Vector2) -> void:
-	var wall := StaticBody2D.new()
-	wall.position = pos
-	wall.collision_layer = 1
-	wall.collision_mask = 0
-	var hw := size.x * 0.5
-	var hh := size.y * 0.5
-	var vis := Polygon2D.new()
-	vis.polygon = PackedVector2Array([
-		Vector2(-hw, -hh), Vector2(hw, -hh), Vector2(hw, hh), Vector2(-hw, hh),
-	])
-	vis.color = Color(0.20, 0.18, 0.16)
-	wall.add_child(vis)
-	var col := CollisionShape2D.new()
-	var shape := RectangleShape2D.new()
+func _build_east_wall(has_door: bool) -> void:
+	var x := (HALF_W + WALL_T * 0.5)
+	var full_h := (HALF_H + WALL_T) * 2.0
+	if has_door:
+		var dh := DOOR_W * 0.5
+		var seg := (HALF_H + WALL_T) - dh
+		_make_wall_3d(Vector3(x, WALL_H * 0.5, -(dh + seg * 0.5)), Vector3(WALL_T, WALL_H, seg))
+		_make_wall_3d(Vector3(x, WALL_H * 0.5,  (dh + seg * 0.5)), Vector3(WALL_T, WALL_H, seg))
+		_make_wall_3d(Vector3(x, DOOR_H + (WALL_H - DOOR_H) * 0.5, 0.0), Vector3(WALL_T, WALL_H - DOOR_H, DOOR_W))
+	else:
+		_make_wall_3d(Vector3(x, WALL_H * 0.5, 0.0), Vector3(WALL_T, WALL_H, full_h))
+
+
+func _build_west_wall(has_door: bool) -> void:
+	var x := -(HALF_W + WALL_T * 0.5)
+	var full_h := (HALF_H + WALL_T) * 2.0
+	if has_door:
+		var dh := DOOR_W * 0.5
+		var seg := (HALF_H + WALL_T) - dh
+		_make_wall_3d(Vector3(x, WALL_H * 0.5, -(dh + seg * 0.5)), Vector3(WALL_T, WALL_H, seg))
+		_make_wall_3d(Vector3(x, WALL_H * 0.5,  (dh + seg * 0.5)), Vector3(WALL_T, WALL_H, seg))
+		_make_wall_3d(Vector3(x, DOOR_H + (WALL_H - DOOR_H) * 0.5, 0.0), Vector3(WALL_T, WALL_H - DOOR_H, DOOR_W))
+	else:
+		_make_wall_3d(Vector3(x, WALL_H * 0.5, 0.0), Vector3(WALL_T, WALL_H, full_h))
+
+
+func _make_wall_3d(pos: Vector3, size: Vector3) -> void:
+	var body := StaticBody3D.new()
+	body.position = pos
+	body.collision_layer = 1
+	body.collision_mask = 0
+
+	var mesh_inst := MeshInstance3D.new()
+	var mesh := BoxMesh.new()
+	mesh.size = size
+	mesh_inst.mesh = mesh
+	mesh_inst.material_override = _flat_material(Color(0.20, 0.18, 0.16))
+	body.add_child(mesh_inst)
+
+	var col := CollisionShape3D.new()
+	var shape := BoxShape3D.new()
 	shape.size = size
 	col.shape = shape
-	wall.add_child(col)
-	add_child(wall)
+	body.add_child(col)
+	add_child(body)
 
 
 # ── Door setup ────────────────────────────────────────────────────────────────
 
-func _door_wall_pos(dir: String) -> Vector2:
+func _door_wall_pos(dir: String) -> Vector3:
 	match dir:
-		"N": return Vector2(0,       -(HALF_H + WALL_T * 0.5))
-		"S": return Vector2(0,        (HALF_H + WALL_T * 0.5))
-		"W": return Vector2(-(HALF_W + WALL_T * 0.5), 0)
-		"E": return Vector2( (HALF_W + WALL_T * 0.5), 0)
-	return Vector2.ZERO
+		"N": return Vector3(0.0,  DOOR_H * 0.5, -(HALF_H + WALL_T * 0.5))
+		"S": return Vector3(0.0,  DOOR_H * 0.5,  (HALF_H + WALL_T * 0.5))
+		"E": return Vector3( (HALF_W + WALL_T * 0.5), DOOR_H * 0.5, 0.0)
+		"W": return Vector3(-(HALF_W + WALL_T * 0.5), DOOR_H * 0.5, 0.0)
+	return Vector3.ZERO
 
 
-func _door_trigger_pos(dir: String) -> Vector2:
+func _door_trigger_pos(dir: String) -> Vector3:
+	var inset := 0.36
 	match dir:
-		"N": return Vector2(0,       -HALF_H + 18)
-		"S": return Vector2(0,        HALF_H - 18)
-		"W": return Vector2(-HALF_W + 18, 0)
-		"E": return Vector2( HALF_W - 18, 0)
-	return Vector2.ZERO
+		"N": return Vector3(0.0,  DOOR_H * 0.5, -HALF_H + inset)
+		"S": return Vector3(0.0,  DOOR_H * 0.5,  HALF_H - inset)
+		"E": return Vector3( HALF_W - inset, DOOR_H * 0.5, 0.0)
+		"W": return Vector3(-HALF_W + inset, DOOR_H * 0.5, 0.0)
+	return Vector3.ZERO
 
 
-func _door_size(dir: String) -> Vector2:
+func _door_size(dir: String) -> Vector3:
 	if dir == "N" or dir == "S":
-		return Vector2(DOOR_W, WALL_T)
-	return Vector2(WALL_T, DOOR_W)
+		return Vector3(DOOR_W, DOOR_H, WALL_T)
+	return Vector3(WALL_T, DOOR_H, DOOR_W)
 
 
 func _setup_doors() -> void:
-	# Doors are open immediately in welcome rooms and already-cleared rooms
 	var open_immediately := _is_current_room_cleared()
 	for dir: String in _active_doors:
 		if not _active_doors[dir]:
 			continue
-		var wpos := _door_wall_pos(dir)
-		var dsize := _door_size(dir)
-		var hw := dsize.x * 0.5
-		var hh := dsize.y * 0.5
-		var verts := PackedVector2Array([
-			Vector2(-hw, -hh), Vector2(hw, -hh), Vector2(hw, hh), Vector2(-hw, hh)
-		])
-
-		var gap := Polygon2D.new()
-		gap.position = wpos
-		gap.polygon = verts
-		gap.color = Color(0.10, 0.08, 0.07)
-		add_child(gap)
-
 		if open_immediately:
 			_add_trigger(dir)
 		else:
-			var vis_block := Polygon2D.new()
-			vis_block.position = wpos
-			vis_block.polygon = verts
-			vis_block.color = Color(0.48, 0.10, 0.08, 0.90)
+			var dsize := _door_size(dir)
+			var dpos  := _door_wall_pos(dir)
+
+			var vis_block := MeshInstance3D.new()
+			vis_block.position = dpos
+			var bmesh := BoxMesh.new()
+			bmesh.size = dsize
+			vis_block.mesh = bmesh
+			vis_block.material_override = _flat_material(Color(0.48, 0.10, 0.08))
 			add_child(vis_block)
 			_door_blockers.append(vis_block)
 
-			var phys_block := StaticBody2D.new()
-			phys_block.position = wpos
+			var phys_block := StaticBody3D.new()
+			phys_block.position = dpos
 			phys_block.collision_layer = 1
 			phys_block.collision_mask = 0
-			var pcol := CollisionShape2D.new()
-			var pshape := RectangleShape2D.new()
+			var pcol := CollisionShape3D.new()
+			var pshape := BoxShape3D.new()
 			pshape.size = dsize
 			pcol.shape = pshape
 			phys_block.add_child(pcol)
@@ -209,19 +221,18 @@ func _setup_doors() -> void:
 
 
 func _add_trigger(dir: String) -> void:
-	var area := Area2D.new()
+	var area := Area3D.new()
 	area.position = _door_trigger_pos(dir)
 	area.collision_layer = 0
 	area.collision_mask = 2
-	var col := CollisionShape2D.new()
-	var shape := RectangleShape2D.new()
+	var col := CollisionShape3D.new()
+	var shape := BoxShape3D.new()
 	shape.size = _door_size(dir)
 	col.shape = shape
 	area.add_child(col)
 	area.body_entered.connect(func(body: Node) -> void:
-		if body is Player:
-			GameState.enter_combat_room(dir)
-			get_tree().reload_current_scene()
+		if body.is_in_group("player"):
+			transition_requested.emit(dir)
 	)
 	add_child(area)
 
@@ -255,163 +266,134 @@ func _build_welcome_content() -> void:
 # ── Exit / portal room ────────────────────────────────────────────────────────
 
 func _build_portal() -> void:
-	var segments := 32
-	var outer_r := 32.0
-	var inner_r := 16.0
+	var portal_node := Node3D.new()
+	portal_node.position = Vector3.ZERO
+	add_child(portal_node)
 
-	var outer_pts := PackedVector2Array()
-	var inner_pts := PackedVector2Array()
-	for i in segments:
-		var angle := i * TAU / segments
-		outer_pts.append(Vector2(cos(angle) * outer_r, sin(angle) * outer_r))
-		inner_pts.append(Vector2(cos(angle) * inner_r, sin(angle) * inner_r))
+	var outer := MeshInstance3D.new()
+	var outer_mesh := CylinderMesh.new()
+	outer_mesh.top_radius = 0.72
+	outer_mesh.bottom_radius = 0.72
+	outer_mesh.height = 0.08
+	outer_mesh.radial_segments = 32
+	outer.mesh = outer_mesh
+	outer.position = Vector3(0.0, 0.04, 0.0)
+	outer.material_override = _flat_material(Color(0.18, 0.82, 0.70), true)
+	portal_node.add_child(outer)
 
-	var portal_area := Area2D.new()
-	portal_area.position = Vector2.ZERO
+	var inner := MeshInstance3D.new()
+	var inner_mesh := CylinderMesh.new()
+	inner_mesh.top_radius = 0.36
+	inner_mesh.bottom_radius = 0.36
+	inner_mesh.height = 0.10
+	inner_mesh.radial_segments = 32
+	inner.mesh = inner_mesh
+	inner.position = Vector3(0.0, 0.05, 0.0)
+	inner.material_override = _flat_material(Color(0.72, 1.00, 0.92), true)
+	portal_node.add_child(inner)
+
+	var portal_area := Area3D.new()
 	portal_area.collision_layer = 0
 	portal_area.collision_mask = 2
-
-	var outer_vis := Polygon2D.new()
-	outer_vis.polygon = outer_pts
-	outer_vis.color = Color(0.18, 0.82, 0.70, 0.80)
-	portal_area.add_child(outer_vis)
-
-	var inner_vis := Polygon2D.new()
-	inner_vis.polygon = inner_pts
-	inner_vis.color = Color(0.72, 1.00, 0.92, 0.95)
-	portal_area.add_child(inner_vis)
-
-	var col := CollisionShape2D.new()
-	var shape := CircleShape2D.new()
-	shape.radius = outer_r
+	var col := CollisionShape3D.new()
+	var shape := CylinderShape3D.new()
+	shape.radius = 0.72
+	shape.height = 0.5
 	col.shape = shape
 	portal_area.add_child(col)
-
 	portal_area.body_entered.connect(func(body: Node) -> void:
-		if body is Player:
+		if body.is_in_group("player") and player != null:
 			player.set_physics_process(false)
 			player.set_process_unhandled_input(false)
 			var fcs := FloorClearScreen.new()
 			add_child(fcs)
 	)
-	add_child(portal_area)
+	portal_node.add_child(portal_area)
 
-	var cl := CanvasLayer.new()
-	var lbl := Label.new()
+	var lbl := Label3D.new()
 	lbl.text = "Portal to Floor %d" % (GameState.floor_number + 1)
-	lbl.anchor_left   = 0.5
-	lbl.anchor_top    = 0.5
-	lbl.anchor_right  = 0.5
-	lbl.anchor_bottom = 0.5
-	lbl.offset_left   = -220.0
-	lbl.offset_right  =  220.0
-	lbl.offset_top    = -80.0
-	lbl.offset_bottom = -44.0
-	lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	lbl.add_theme_font_size_override("font_size", 18)
-	lbl.add_theme_color_override("font_color", Color(0.50, 0.95, 0.80, 0.80))
-	cl.add_child(lbl)
-	add_child(cl)
+	lbl.position = Vector3(0.0, 1.6, 0.0)
+	lbl.font_size = 48
+	lbl.modulate = Color(0.50, 0.95, 0.80, 0.90)
+	lbl.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+	lbl.no_depth_test = true
+	portal_node.add_child(lbl)
 
 
 # ── Player ────────────────────────────────────────────────────────────────────
 
 func _build_player() -> void:
-	player = PLAYER_SCENE.instantiate() as Player
+	player = PLAYER_SCENE.instantiate()
 	player.position = _player_spawn_pos(GameState.entry_direction)
 	if GameState.player_health > 0:
 		player.health = GameState.player_health
 	add_child(player)
 
 
-func _player_spawn_pos(entry_dir: String) -> Vector2:
-	# Spawn far enough from each wall that the player's collision shape (25px half-height)
-	# never overlaps door trigger areas (which sit ~18px from the wall interior).
+func spawn_player() -> void:
+	_build_player()
+	player.died.connect(_on_player_died)
+	if enemies_node != null:
+		if not room_cleared.is_connected(_on_room_cleared):
+			room_cleared.connect(_on_room_cleared)
+		for e in enemies_node.get_children():
+			if e is Kenjutsu:
+				e.player = player
+				e.died.connect(_on_enemy_died.bind(e))
+
+
+func _player_spawn_pos(entry_dir: String) -> Vector3:
 	match entry_dir:
-		"N": return Vector2(0.0,           HALF_H - 90.0)
-		"S": return Vector2(0.0,          -(HALF_H - 90.0))
-		"E": return Vector2(-(HALF_W - 90.0), 0.0)
-		"W": return Vector2( (HALF_W - 90.0), 0.0)
-	return Vector2.ZERO  # welcome room: center
+		"N": return Vector3(0.0, 0.0,  HALF_H - 1.8)
+		"S": return Vector3(0.0, 0.0, -(HALF_H - 1.8))
+		"E": return Vector3(-(HALF_W - 1.8), 0.0, 0.0)
+		"W": return Vector3( (HALF_W - 1.8), 0.0, 0.0)
+	return Vector3.ZERO
 
 
 # ── Enemies ───────────────────────────────────────────────────────────────────
 
 func _build_enemies() -> void:
-	enemies_node = Node2D.new()
-	enemies_node.name = "Enemies"
+	enemies_node = Node3D.new()
 	add_child(enemies_node)
 	for pos in _enemy_positions():
-		var e := KENJUTSU_SCENE.instantiate()
-		e.position = pos
-		enemies_node.add_child(e)
+		var enemy: Kenjutsu = KENJUTSU_SCENE.instantiate()
+		enemy.position = pos
+		enemies_node.add_child(enemy)
 
 
-func _enemy_positions() -> Array[Vector2]:
+func _enemy_positions() -> Array[Vector3]:
 	match GameState.room_type:
 		GameState.RoomType.SMALL:
-			return [Vector2(0, -120)]
+			return [Vector3(0.0, 0.0, -2.4)]
 		GameState.RoomType.MEDIUM:
-			return [Vector2(250, 50), Vector2(-250, 50), Vector2(0, -180)]
+			return [Vector3(5.0, 0.0, 1.0), Vector3(-5.0, 0.0, 1.0), Vector3(0.0, 0.0, -3.6)]
 		GameState.RoomType.LARGE:
-			return [Vector2(280, 30), Vector2(-280, 30), Vector2(0, -200),
-					Vector2(200, -130), Vector2(-200, -130)]
+			return [Vector3(5.6, 0.0, 0.6), Vector3(-5.6, 0.0, 0.6), Vector3(0.0, 0.0, -4.0),
+					Vector3(4.0, 0.0, -2.6), Vector3(-4.0, 0.0, -2.6)]
 		GameState.RoomType.OBSTACLE:
-			return [Vector2(220, 70), Vector2(-220, 70), Vector2(0, -170)]
+			return [Vector3(4.4, 0.0, 1.4), Vector3(-4.4, 0.0, 1.4), Vector3(0.0, 0.0, -3.4)]
 		GameState.RoomType.AMBUSH:
-			return [Vector2(100, 80), Vector2(-100, 80),
-					Vector2(130, -60), Vector2(-130, -60), Vector2(0, 30)]
-	return [Vector2(0, -120)]
+			return [Vector3(2.0, 0.0, 1.6), Vector3(-2.0, 0.0, 1.6),
+					Vector3(2.6, 0.0, -1.2), Vector3(-2.6, 0.0, -1.2), Vector3(0.0, 0.0, 0.6)]
+	return [Vector3(0.0, 0.0, -2.4)]
 
 
-# ── Obstacles (OBSTACLE room only) ────────────────────────────────────────────
+# ── Obstacles ─────────────────────────────────────────────────────────────────
 
 func _build_obstacles() -> void:
-	var spots: Array[Vector2] = [
-		Vector2(140, 60), Vector2(-140, 60),
-		Vector2(0, -110), Vector2(210, -110), Vector2(-210, -110),
-	]
-	for pos in spots:
-		_make_pillar(pos)
-
-
-func _make_pillar(pos: Vector2) -> void:
-	var body := StaticBody2D.new()
-	body.position = pos
-	body.collision_layer = 1
-	body.collision_mask = 0
-	var r := 22.0
-	var vis := Polygon2D.new()
-	vis.polygon = PackedVector2Array([
-		Vector2(-r, -r * 1.4), Vector2(r, -r * 1.4),
-		Vector2(r,   r * 0.6), Vector2(-r,  r * 0.6),
-	])
-	vis.color = Color(0.30, 0.26, 0.20)
-	body.add_child(vis)
-	var col := CollisionShape2D.new()
-	var shape := RectangleShape2D.new()
-	shape.size = Vector2(r * 2.0, r * 2.0)
-	col.shape = shape
-	body.add_child(col)
-	add_child(body)
+	pass  # Phase 3: BoxMesh StaticBody3D pillars
 
 
 # ── Signals ───────────────────────────────────────────────────────────────────
 
 func _connect_signals() -> void:
-	player.health_changed.connect(func(current: int, _max: int) -> void:
-		GameState.player_health = current
-	)
-	player.health_changed.connect(hud._on_player_health_changed)
-	player.dash_cooldown_changed.connect(hud._on_player_dash_changed)
 	player.died.connect(_on_player_died)
-	hud._on_player_health_changed(player.health, player.max_health)
-	hud._on_player_dash_changed(1.0)
 
 	if enemies_node != null:
 		room_cleared.connect(_on_room_cleared)
 		for e in enemies_node.get_children():
-			if e is Enemy:
+			if e is Kenjutsu:
 				e.player = player
 				e.died.connect(_on_enemy_died.bind(e))
 
@@ -432,7 +414,7 @@ func _on_room_cleared() -> void:
 func _on_enemy_died(_enemy: Node) -> void:
 	await get_tree().process_frame
 	var alive := enemies_node.get_children().filter(
-		func(c: Node) -> bool: return c is Enemy and is_instance_valid(c)
+		func(c: Node) -> bool: return c is Kenjutsu and is_instance_valid(c)
 	)
 	if alive.is_empty():
 		room_cleared.emit()
@@ -443,5 +425,17 @@ func _on_player_died() -> void:
 		for e in enemies_node.get_children():
 			if is_instance_valid(e):
 				e.set_physics_process(false)
-	var game_over := GameOverScreen.new()
-	add_child(game_over)
+
+
+# ── Utilities ─────────────────────────────────────────────────────────────────
+
+func _flat_material(color: Color, unshaded: bool = false) -> Material:
+	if unshaded:
+		var mat := StandardMaterial3D.new()
+		mat.albedo_color = color
+		mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		return mat
+	var mat := ShaderMaterial.new()
+	mat.shader = TOON_SHADER
+	mat.set_shader_parameter("albedo", color)
+	return mat
