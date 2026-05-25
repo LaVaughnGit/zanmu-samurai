@@ -1,0 +1,19 @@
+[remap]
+
+importer="mp3"
+type="AudioStreamMP3"
+uid="uid://lix3n1cu4kgx"
+path="res://.godot/imported/just-forget.mp3-d07871fcefd3dd4e75e9b8aa30bab755.mp3str"
+
+[deps]
+
+source_file="res://music/game music/just-forget.mp3"
+dest_files=["res://.godot/imported/just-forget.mp3-d07871fcefd3dd4e75e9b8aa30bab755.mp3str"]
+
+[params]
+
+loop=false
+loop_offset=0
+bpm=0
+beat_count=0
+bar_beats=4

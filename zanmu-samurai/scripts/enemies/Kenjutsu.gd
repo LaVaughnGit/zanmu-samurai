@@ -3,6 +3,7 @@ class_name Kenjutsu
 
 const OUTLINE_SHADER := preload("res://shaders/outline.gdshader")
 const TOON_SHADER    := preload("res://shaders/toon.gdshader")
+const SLASH_SFX      := preload("res://music/sound effects/enemy-sword-slash.mp3")
 
 signal died
 
@@ -32,12 +33,16 @@ var base_color        := Color(0.78, 0.14, 0.14)
 var hit_flash_timer   := 0.0
 var locked_attack_dir := Vector3.RIGHT
 var _attack_hit       := false
+var _slash_sfx:        AudioStreamPlayer
 
 
 func _ready() -> void:
 	add_to_group("enemies")
 	motion_mode = CharacterBody3D.MOTION_MODE_FLOATING
 	_build_nodes()
+	_slash_sfx = AudioStreamPlayer.new()
+	_slash_sfx.stream = SLASH_SFX
+	add_child(_slash_sfx)
 
 
 func _build_nodes() -> void:
@@ -165,6 +170,7 @@ func _enter_telegraph() -> void:
 	velocity = locked_attack_dir * speed
 	telegraph_visual.visible = true
 	telegraph_visual.position = locked_attack_dir * 0.9 + Vector3(0.0, 0.02, 0.0)
+	_slash_sfx.play()
 
 
 func _enter_attack() -> void:
