@@ -1,8 +1,11 @@
 extends CharacterBody3D
 class_name Player
 
-const OUTLINE_SHADER := preload("res://shaders/outline.gdshader")
-const TOON_SHADER    := preload("res://shaders/toon.gdshader")
+const OUTLINE_SHADER  := preload("res://shaders/outline.gdshader")
+const TOON_SHADER     := preload("res://shaders/toon.gdshader")
+const SLASH_SFX       := preload("res://music/sound effects/player-sword-slash.mp3")
+const CLASH_SFX       := preload("res://music/sound effects/swords-clashing.mp3")
+const DEATH_SFX       := preload("res://music/sound effects/death-sword-effect.mp3")
 
 signal health_changed(current: int, maximum: int)
 signal dash_cooldown_changed(ratio: float)
@@ -36,6 +39,9 @@ var visual:           MeshInstance3D
 var attack_area:      Area3D
 var attack_collision: CollisionShape3D
 var attack_visual:    MeshInstance3D
+var _slash_sfx:       AudioStreamPlayer
+var _clash_sfx:       AudioStreamPlayer
+var _death_sfx:       AudioStreamPlayer
 
 
 func _ready() -> void:
@@ -44,6 +50,15 @@ func _ready() -> void:
 	_build_nodes()
 	_setup_visuals()
 	attack_area.body_entered.connect(_on_attack_hit)
+	_slash_sfx = AudioStreamPlayer.new()
+	_slash_sfx.stream = SLASH_SFX
+	add_child(_slash_sfx)
+	_clash_sfx = AudioStreamPlayer.new()
+	_clash_sfx.stream = CLASH_SFX
+	add_child(_clash_sfx)
+	_death_sfx = AudioStreamPlayer.new()
+	_death_sfx.stream = DEATH_SFX
+	add_child(_death_sfx)
 
 
 func _build_nodes() -> void:
@@ -116,6 +131,7 @@ func _unhandled_input(event: InputEvent) -> void:
 	if health <= 0:
 		return
 	if event.is_action_pressed("attack") and not is_attacking:
+		_slash_sfx.play()
 		_do_attack()
 	if event.is_action_pressed("dash") and not is_dashing and dash_cooldown_timer <= 0.0:
 		_do_dash()
@@ -212,6 +228,8 @@ func _do_dash() -> void:
 
 func _on_attack_hit(body: Node) -> void:
 	if body.is_in_group("enemies"):
+		if body is Kenjutsu and body.state == Kenjutsu.State.ATTACK:
+			_clash_sfx.play()
 		body.take_damage(999 if GameState.debug_mode else ATTACK_DAMAGE)
 		attack_collision.disabled = true
 		attack_area.monitoring = false
@@ -233,6 +251,8 @@ func _on_death() -> void:
 	set_physics_process(false)
 	set_process_unhandled_input(false)
 	died.emit()
+	await get_tree().create_timer(0.25).timeout
+	_death_sfx.play()
 
 
 func _add_outline(mesh_inst: MeshInstance3D, width: float) -> void:

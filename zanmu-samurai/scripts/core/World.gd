@@ -16,16 +16,19 @@ var hud: HUD
 var current_room: Room = null
 var _transitioning := false
 var _loaded_rooms: Dictionary = {}
+var _music: AudioStreamPlayer
 
 
 func _ready() -> void:
 	_setup_environment()
 	_setup_camera()
+	_setup_music()
 	hud = HUD.new()
 	add_child(hud)
 	_load_room(Vector3.ZERO)
 	await get_tree().process_frame
 	get_viewport().grab_focus()
+	_fade_in_scene()
 
 
 func _setup_environment() -> void:
@@ -55,6 +58,17 @@ func _setup_environment() -> void:
 	fill.light_color      = Color(0.65, 0.75, 1.0)
 	fill.shadow_enabled   = false
 	add_child(fill)
+
+
+func _setup_music() -> void:
+	_music = AudioStreamPlayer.new()
+	_music.stream = load("res://music/game music/just-forget.mp3")
+	_music.volume_db = -80.0
+	_music.autoplay = false
+	add_child(_music)
+	_music.play()
+	var tw := create_tween()
+	tw.tween_property(_music, "volume_db", 0.0, 5.0).set_trans(Tween.TRANS_LINEAR)
 
 
 func _setup_camera() -> void:
@@ -140,6 +154,19 @@ func _finish_transition(new_room: Room, new_origin: Vector3) -> void:
 	current_room = new_room
 	_connect_room(new_room)
 	_transitioning = false
+
+
+func _fade_in_scene() -> void:
+	var cl := CanvasLayer.new()
+	cl.layer = 100
+	add_child(cl)
+	var rect := ColorRect.new()
+	rect.color = Color(0.0, 0.0, 0.0, 1.0)
+	rect.set_anchors_preset(Control.PRESET_FULL_RECT)
+	cl.add_child(rect)
+	var tw := create_tween()
+	tw.tween_property(rect, "color:a", 0.0, 5.0).set_trans(Tween.TRANS_LINEAR)
+	tw.tween_callback(cl.queue_free)
 
 
 func _on_player_died() -> void:
